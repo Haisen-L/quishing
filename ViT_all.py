@@ -1,0 +1,263 @@
+#########################
+# Imports
+#########################
+import os
+import sys
+import time
+import collections
+
+import pandas as pd
+
+import torch
+import torch.nn as nn
+import torch.optim as optim
+from torch.utils.data import DataLoader, Dataset
+
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import precision_score, recall_score, f1_score, confusion_matrix
+
+import seaborn as sns
+import matplotlib.pyplot as plt
+
+from PIL import Image
+
+# Additional imports for ViT model and image preprocessing
+import timm
+from torchvision import transforms
+
+
+#########################
+# Global Configurations
+#########################
+# Measure total runtime
+start_time = time.time()
+torch.backends.cudnn.benchmark = True
+
+
+#########################
+# File Paths & Output Directories
+#########################
+CSV_FILE = "data/output_list/output_L.csv"  # Input CSV with QR_Code_Path & result
+PRED_DIR = "data/predict"                   # Where to save prediction CSVs
+MODEL_NAME = "ViT"                          # Used for naming outputs
+FOLDER_NAME = "output_L"                    # Identifier from CSV name
+
+# Ensure output directories exist
+if not os.path.exists(PRED_DIR):
+    os.makedirs(PRED_DIR)
+MODEL_PRED_DIR = os.path.join(PRED_DIR, MODEL_NAME)
+if not os.path.exists(MODEL_PRED_DIR):
+    os.makedirs(MODEL_PRED_DIR)
+CM_DIR = os.path.join("cm", MODEL_NAME)
+if not os.path.exists(CM_DIR):
+    os.makedirs(CM_DIR)
+
+# Print human‑readable start time
+start_time_readable = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(start_time))
+print(f"Start time: {start_time_readable}")
+
+
+#########################
+# Data Preparation
+#########################
+# Load CSV and cast labels to int
+df = pd.read_csv(CSV_FILE)
+df["result"] = df["result"].astype(int)
+print("Label distribution in CSV:", collections.Counter(df["result"]))
+
+# Preprocessing transform for ViT
+preprocess = transforms.Compose([
+    transforms.Resize(256),
+    transforms.CenterCrop(224),
+    transforms.ToTensor(),
+    transforms.Normalize(
+        mean=[0.485, 0.456, 0.406],
+        std=[0.229, 0.224, 0.225],
+    ),
+])
+
+
+#########################
+# Dataset Definition
+#########################
+class QRCodeDataset(Dataset):
+    def __init__(self, df, transform):
+        self.df = df.reset_index(drop=True)
+        self.transform = transform
+
+    def __len__(self):
+        return len(self.df)
+
+    def __getitem__(self, idx):
+        row = self.df.iloc[idx]
+        image = Image.open(row["QR_Code_Path"]).convert("RGB")
+        image = self.transform(image)
+        label = torch.tensor(row["result"], dtype=torch.long)
+        return image, label
+
+
+#########################
+# Model Loading
+#########################
+device = torch.device("cuda" if torch.cuda.is_available() else sys.exit("Error: No GPU found! Exiting..."))
+print(f"Using device: {device}")
+
+vit_model = timm.create_model("vit_huge_patch14_224", pretrained=True)
+vit_model.to(device)
+vit_model.eval()
+
+
+#########################
+# Train/Val/Test Split
+#########################
+# 20% test, then split remaining 80% into 70% train / 10% val
+train_val_df, test_df = train_test_split(df, test_size=0.2, random_state=42)
+train_df, val_df = train_test_split(train_val_df, test_size=0.125, random_state=42)
+
+print(f"Train: {len(train_df)}, Val: {len(val_df)}, Test: {len(test_df)}")
+
+
+#########################
+# Dataloaders
+#########################
+train_loader = DataLoader(QRCodeDataset(train_df, preprocess), batch_size=1024, shuffle=True)
+val_loader = DataLoader(QRCodeDataset(val_df, preprocess), batch_size=1024, shuffle=False)
+
+
+#########################
+# Classifier Definition
+#########################
+class ViTClassifier(nn.Module):
+    def __init__(self, vit_model, num_classes=2):
+        super().__init__()
+        self.vit_model = vit_model
+        self.fc = nn.Linear(1280, num_classes)
+
+    def forward(self, x):
+        with torch.no_grad():
+            feats = self.vit_model.forward_features(x)
+        cls_token = feats[:, 0]
+        return self.fc(cls_token)
+
+
+#########################
+# Initialize Model, Optimizer & Loss
+#########################
+model = ViTClassifier(vit_model).to(device)
+if torch.cuda.device_count() > 1:
+    print(f"Using {torch.cuda.device_count()} GPUs")
+    model = nn.DataParallel(model)
+
+params = model.module.fc.parameters() if isinstance(model, nn.DataParallel) else model.fc.parameters()
+optimizer = optim.AdamW(params, lr=0.016)
+criterion = nn.CrossEntropyLoss()
+
+
+#########################
+# Training Function
+#########################
+def train(model, train_loader, val_loader, optimizer, criterion, device, epochs=8):
+    for epoch in range(epochs):
+        model.train()
+        total_loss = 0
+        for images, labels in train_loader:
+            images, labels = images.to(device), labels.to(device)
+            optimizer.zero_grad()
+            outputs = model(images)
+            loss = criterion(outputs, labels)
+            loss.backward()
+            optimizer.step()
+            total_loss += loss.item()
+        avg_loss = total_loss / len(train_loader)
+
+        model.eval()
+        val_loss = 0
+        all_preds, all_labels = [], []
+        with torch.no_grad():
+            for images, labels in val_loader:
+                images, labels = images.to(device), labels.to(device)
+                outputs = model(images)
+                val_loss += criterion(outputs, labels).item()
+                preds = torch.argmax(outputs, dim=1).cpu().numpy()
+                all_preds.extend(preds)
+                all_labels.extend(labels.cpu().numpy())
+        avg_val_loss = val_loss / len(val_loader)
+        precision = precision_score(all_labels, all_preds)
+        recall = recall_score(all_labels, all_preds)
+        f1 = f1_score(all_labels, all_preds)
+
+        print(
+            f"Epoch {epoch+1}: Train Loss={avg_loss:.4f}, Val Loss={avg_val_loss:.4f}, "
+            f"Precision={precision:.4f}, Recall={recall:.4f}, F1={f1:.4f}"
+        )
+
+
+train(model, train_loader, val_loader, optimizer, criterion, device)
+
+
+#########################
+# Evaluation Function
+#########################
+def evaluate(model, loader, device):
+    model.eval()
+    preds, labels = [], []
+    with torch.no_grad():
+        for images, labs in loader:
+            images, labs = images.to(device), labs.to(device)
+            out = model(images)
+            preds.extend(torch.argmax(out, dim=1).cpu().numpy())
+            labels.extend(labs.cpu().numpy())
+    return preds, labels
+
+
+#########################
+# Test Metrics by QR Version
+#########################
+test_versions = sorted(test_df["QR_Version"].unique())
+print("\n--- Test Metrics by QR Version ---")
+for v in test_versions:
+    df_v = test_df[test_df["QR_Version"] == v]
+    loader_v = DataLoader(QRCodeDataset(df_v, preprocess), batch_size=1024, shuffle=False)
+    preds, labs = evaluate(model, loader_v, device)
+
+    prec = precision_score(labs, preds)
+    rec = recall_score(labs, preds)
+    f1 = f1_score(labs, preds)
+    cm = confusion_matrix(labs, preds, labels=[0, 1])
+
+    count_v = len(labs)
+    print(f"\nVersion {v}: (n={count_v}): "
+          f"Precision={prec:.4f}, "
+          f"Recall={rec:.4f}, "
+          f"F1={f1:.4f}")
+
+    plt.figure(figsize=(6, 5))
+    sns.heatmap(cm, annot=True, fmt="d", cmap="Blues",
+                xticklabels=["Benign", "Malicious"], yticklabels=["Benign", "Malicious"])
+    plt.title(f"Confusion Matrix - v{v}")
+    cm_path = os.path.join(CM_DIR, f"{FOLDER_NAME}_vit_huge_v{v}.png")
+    plt.savefig(cm_path, dpi=300, bbox_inches="tight")
+    plt.close()
+    print(f"Saved CM: {cm_path}")
+
+
+#########################
+# Save Overall Predictions
+#########################
+all_preds, _ = evaluate(model, DataLoader(QRCodeDataset(test_df, preprocess), batch_size=1024), device)
+output_file = os.path.join(MODEL_PRED_DIR, f"{MODEL_NAME}_{FOLDER_NAME}_all_v_predict.csv")
+test_df["predict_label"] = all_preds
+test_df.to_csv(output_file, index=False)
+print(f"\nOverall predictions saved to: {output_file}")
+
+
+#########################
+# Runtime Measurement
+#########################
+end_time = time.time()
+end_time_readable = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(end_time))
+elapsed = end_time - start_time
+hrs, rem = divmod(elapsed, 3600)
+mins, secs = divmod(rem, 60)
+print(f"End time: {end_time_readable}")
+print(f"Total running time: {int(hrs):02}:{int(mins):02}:{int(secs):02}")
