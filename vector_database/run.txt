@@ -1,0 +1,117 @@
+full_real
+
+python qr_real_retrieval_eval_chunked_8models.py \
+  --csv qr_real_prepared_712.csv \
+  --output_dir results_qr_real_chunked_8models_full \
+  --gallery_split gallery \
+  --query_split test \
+  --risk_threshold 0.5 \
+  --batch_size_dinov2 2048 \
+  --batch_size_convnext 1024 \
+  --batch_size_cvt 1024 \
+  --batch_size_swin 1024 \
+  --batch_size_dinov3 2048 \
+  --batch_size_pe 2048 \
+  --batch_size_siglip2 2048 \
+  --batch_size_eva02 2048 \
+  --num_workers 8 \
+  --prefetch_factor 4 \
+  --gallery_chunk_size 65536 \
+  --query_chunk_size 512 \
+  --device cuda
+
+
+test
+
+python qr_only_retrieval_eval_chunked_8models.py \
+  --csv qr_crop_fit_L_prepared_712.csv \
+  --output_dir results_qr_only_chunked_8models_test \
+  --gallery_split gallery \
+  --query_split test \
+  --risk_threshold 0.5 \
+  --batch_size_dinov2 2048 \
+  --batch_size_convnext 1024 \
+  --batch_size_cvt 1024 \
+  --batch_size_swin 1024 \
+  --batch_size_dinov3 2048 \
+  --batch_size_pe 2048 \
+  --batch_size_siglip2 2048 \
+  --batch_size_eva02 2048 \
+  --num_workers 8 \
+  --prefetch_factor 4 \
+  --gallery_chunk_size 65536 \
+  --query_chunk_size 512 \
+  --max_gallery 20000 \
+  --max_query 5000 \
+  --device cuda
+  
+full
+  
+python qr_only_retrieval_eval_chunked_8models.py \
+  --csv qr_crop_fit_L_prepared_712.csv \
+  --output_dir results_qr_only_chunked_8models_full \
+  --gallery_split gallery \
+  --query_split test \
+  --risk_threshold 0.5 \
+  --batch_size_dinov2 2048 \
+  --batch_size_convnext 1024 \
+  --batch_size_cvt 1024 \
+  --batch_size_swin 1024 \
+  --batch_size_dinov3 2048 \
+  --batch_size_pe 2048 \
+  --batch_size_siglip2 2048 \
+  --batch_size_eva02 2048 \
+  --num_workers 8 \
+  --prefetch_factor 4 \
+  --gallery_chunk_size 65536 \
+  --query_chunk_size 512 \
+  --device cuda
+  
+  
+
+  
+  
+  
+  --models DINOv3,PE,SigLIP2,EVA02 \
+  DINOv2,ConvNeXtV2_FCMAE,CvT,Swin,DINOv3,PE,SigLIP2,EVA02
+
+
+vdb
+python qr_offline_build_vector_db_8models.py \
+  --csv qr_crop_fit_L_prepared_712.csv \
+  --output_dir offline_vector_db_qr_only_8models \
+  --gallery_split gallery \
+  --image_col qr_crop_path \
+  --batch_size_dinov2 2048 \
+  --batch_size_convnext 1024 \
+  --batch_size_cvt 1024 \
+  --batch_size_swin 1024 \
+  --batch_size_dinov3 2048 \
+  --batch_size_pe 2048 \
+  --batch_size_siglip2 2048 \
+  --batch_size_eva02 2048 \
+  --num_workers 8 \
+  --prefetch_factor 4 \
+  --device cuda
+
+vdb_test
+python test_all_test_qr_vector_db_8models.py \
+  --csv qr_crop_fit_L_prepared_712.csv \
+  --vector_db_dir offline_vector_db_qr_only_8models \
+  --image_col qr_crop_path \
+  --query_split test \
+  --output_dir vector_db_test_results_all_test \
+  --models DINOv2,ConvNeXtV2_FCMAE,CvT,Swin,DINOv3,PE,SigLIP2,EVA02 \
+  --topk 10 \
+  --risk_threshold 0.5 \
+  --batch_size_dinov2 2048 \
+  --batch_size_convnext 1024 \
+  --batch_size_cvt 1024 \
+  --batch_size_swin 1024 \
+  --batch_size_dinov3 2048 \
+  --batch_size_pe 2048 \
+  --batch_size_siglip2 2048 \
+  --batch_size_eva02 2048 \
+  --num_workers 8 \
+  --prefetch_factor 4 \
+  --device cuda
